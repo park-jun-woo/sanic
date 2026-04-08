@@ -131,6 +131,7 @@ class Header(CIMultiDict):
 
 
 use_trio = sys.argv[0].endswith("hypercorn") and "trio" in sys.argv
+CancelledErrors: tuple[type[BaseException], ...]
 
 if use_trio:  # pragma: no cover
     import trio  # type: ignore
@@ -153,7 +154,7 @@ else:
     async def open_async(file, mode="r", **kwargs):
         return aio_open(file, mode, **kwargs)
 
-    CancelledErrors = tuple([asyncio.CancelledError])
+    CancelledErrors = (asyncio.CancelledError,)
 
 
 def ctrlc_workaround_for_windows(app):
