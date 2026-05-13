@@ -1,6 +1,7 @@
+# ff:type feature=websocket type=protocol
+# ff:what WebSocket protocol extending HTTP/1.1 with upgrade handshake and fram
 from collections.abc import Sequence
 from typing import cast
-
 
 try:  # websockets >= 11.0
     from websockets.protocol import State  # type: ignore
@@ -19,7 +20,6 @@ from sanic.request import Request
 from sanic.server import HttpProtocol
 
 from ..websockets.impl import WebsocketImplProtocol
-
 
 OPEN = State.OPEN
 CLOSING = State.CLOSING

@@ -1,3 +1,7 @@
+# ff:func feature=logging type=util control=sequence
+# ff:what Emit a deprecation warning with optional version number and color for
+
+
 from warnings import warn
 
 from sanic.helpers import is_atty

@@ -1,3 +1,5 @@
+# ff:type feature=worker type=handler
+# ff:what Worker-side multiplexer for communicating with the monitor process
 from __future__ import annotations
 
 from multiprocessing.connection import Connection

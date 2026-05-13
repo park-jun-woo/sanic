@@ -1,3 +1,7 @@
+# ff:type feature=touchup type=model
+# ff:what Abstract base class for AST transformation schemes with visitor patte
+
+
 from abc import ABC, abstractmethod
 from ast import NodeTransformer, parse
 from inspect import getsource

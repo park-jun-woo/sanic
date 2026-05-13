@@ -1,3 +1,5 @@
+# ff:type feature=worker type=handler
+# ff:what Inspector server that exposes worker state and management actions via
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -57,6 +59,13 @@ class Inspector:
         self.tls_key = tls_key
         self.tls_cert = tls_cert
 
+    def _build_ssl(self):
+        if not isinstance(self.tls_key, Default) and not isinstance(
+            self.tls_cert, Default
+        ):
+            return {"key": self.tls_key, "cert": self.tls_cert}
+        return None
+
     def __call__(self, run=True, **_) -> Inspector:
         from sanic import Sanic
 
@@ -67,10 +76,7 @@ class Inspector:
                 host=self.host,
                 port=self.port,
                 single_process=True,
-                ssl={"key": self.tls_key, "cert": self.tls_cert}
-                if not isinstance(self.tls_key, Default)
-                and not isinstance(self.tls_cert, Default)
-                else None,
+                ssl=self._build_ssl(),
             )
         return self
 

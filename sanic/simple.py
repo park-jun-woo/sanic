@@ -1,3 +1,5 @@
+# ff:func feature=server type=builder control=sequence
+# ff:what Creates a simple static file server for a given directory
 from pathlib import Path
 
 from sanic import Sanic

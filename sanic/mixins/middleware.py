@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing middleware registration and finalization for request
+
+
 from __future__ import annotations
 
 from collections import deque
@@ -161,6 +165,32 @@ class MiddlewareMixin(metaclass=SanicMeta):
                 self.middleware, attach_to="response", priority=priority
             )
 
+    def _finalize_route_middleware(self, route) -> None:
+        request_middleware = Middleware.convert(
+            self.request_middleware,  # type: ignore
+            self.named_request_middleware.get(route.name, deque()),  # type: ignore  # noqa: E501
+            location=MiddlewareLocation.REQUEST,
+        )
+        response_middleware = Middleware.convert(
+            self.response_middleware,  # type: ignore
+            self.named_response_middleware.get(route.name, deque()),  # type: ignore  # noqa: E501
+            location=MiddlewareLocation.RESPONSE,
+        )
+        route.extra.request_middleware = deque(
+            sorted(
+                request_middleware,
+                key=attrgetter("order"),
+                reverse=True,
+            )
+        )
+        route.extra.response_middleware = deque(
+            sorted(
+                response_middleware,
+                key=attrgetter("order"),
+                reverse=True,
+            )[::-1]
+        )
+
     def finalize_middleware(self) -> None:
         """Finalize the middleware configuration for the Sanic application.
 
@@ -184,30 +214,7 @@ class MiddlewareMixin(metaclass=SanicMeta):
             ```
         """
         for route in self.router.routes:
-            request_middleware = Middleware.convert(
-                self.request_middleware,  # type: ignore
-                self.named_request_middleware.get(route.name, deque()),  # type: ignore  # noqa: E501
-                location=MiddlewareLocation.REQUEST,
-            )
-            response_middleware = Middleware.convert(
-                self.response_middleware,  # type: ignore
-                self.named_response_middleware.get(route.name, deque()),  # type: ignore  # noqa: E501
-                location=MiddlewareLocation.RESPONSE,
-            )
-            route.extra.request_middleware = deque(
-                sorted(
-                    request_middleware,
-                    key=attrgetter("order"),
-                    reverse=True,
-                )
-            )
-            route.extra.response_middleware = deque(
-                sorted(
-                    response_middleware,
-                    key=attrgetter("order"),
-                    reverse=True,
-                )[::-1]
-            )
+            self._finalize_route_middleware(route)
         request_middleware = Middleware.convert(
             self.request_middleware,  # type: ignore
             location=MiddlewareLocation.REQUEST,

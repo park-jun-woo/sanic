@@ -1,3 +1,5 @@
+# ff:type feature=worker type=handler
+# ff:what File-watching reloader that triggers worker restarts on source change
 from __future__ import annotations
 
 import os
@@ -46,28 +48,32 @@ class Reloader:
             trigger_events(reloader_start, loop, app)
 
         while self.run:
-            changed = set()
-            for filename in self.files():
-                try:
-                    if self.check_file(filename, mtimes):
-                        path = (
-                            filename
-                            if isinstance(filename, str)
-                            else filename.resolve()
-                        )
-                        changed.add(str(path))
-                except OSError:
-                    continue
+            changed = self._detect_changes(mtimes)
+            if changed and before_trigger:
+                trigger_events(before_trigger, loop, app)
             if changed:
-                if before_trigger:
-                    trigger_events(before_trigger, loop, app)
                 self.reload(",".join(changed) if changed else "unknown")
-                if after_trigger:
-                    trigger_events(after_trigger, loop, app, changed=changed)
+            if changed and after_trigger:
+                trigger_events(after_trigger, loop, app, changed=changed)
             sleep(self.interval)
         else:
             if reloader_stop:
                 trigger_events(reloader_stop, loop, app)
+
+    def _detect_changes(self, mtimes):
+        changed = set()
+        for filename in self.files():
+            try:
+                if self.check_file(filename, mtimes):
+                    path = (
+                        filename
+                        if isinstance(filename, str)
+                        else filename.resolve()
+                    )
+                    changed.add(str(path))
+            except OSError:
+                continue
+        return changed
 
     def stop(self, *_):
         self.run = False
@@ -82,6 +88,19 @@ class Reloader:
             *(d.glob("**/*") for d in self.reload_dirs),
         )
 
+    @staticmethod
+    def _resolve_module_file(filename):
+        """Resolve a module filename to an actual file path."""
+        old = None
+        while not os.path.isfile(filename):
+            old = filename
+            filename = os.path.dirname(filename)
+            if filename == old:
+                return None
+        if filename[-4:] in (".pyc", ".pyo"):
+            filename = filename[:-1]
+        return filename
+
     def python_files(self):  # no cov
         """This iterates over all relevant Python files.
 
@@ -95,17 +114,11 @@ class Reloader:
             if module is None:
                 continue
             filename = getattr(module, "__file__", None)
-            if filename:
-                old = None
-                while not os.path.isfile(filename):
-                    old = filename
-                    filename = os.path.dirname(filename)
-                    if filename == old:
-                        break
-                else:
-                    if filename[-4:] in (".pyc", ".pyo"):
-                        filename = filename[:-1]
-                    yield filename
+            if not filename:
+                continue
+            resolved = self._resolve_module_file(filename)
+            if resolved is not None:
+                yield resolved
 
     @staticmethod
     def check_file(filename, mtimes) -> bool:

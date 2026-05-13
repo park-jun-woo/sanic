@@ -1,3 +1,7 @@
+# ff:type feature=error type=handler
+# ff:what Process and handle all uncaught exceptions with lookup, caching, and
+
+
 from __future__ import annotations
 
 from sanic.errorpages import BaseRenderer, TextRenderer, exception_response
@@ -92,20 +96,27 @@ class ErrorHandler:
                 return handler
 
         for name in (route_name, None):
-            for ancestor in type.mro(exception_class):
-                exception_key = (ancestor, name)
-                if exception_key in self.cached_handlers:
-                    handler = self.cached_handlers[exception_key]
-                    self.cached_handlers[(exception_class, route_name)] = (
-                        handler
-                    )
-                    return handler
-
-                if ancestor is BaseException:
-                    break
+            handler = self._lookup_by_mro(
+                exception_class,
+                name,
+                route_name,
+            )
+            if handler is not None:
+                return handler
         self.cached_handlers[(exception_class, route_name)] = None
         handler = None
         return handler
+
+    def _lookup_by_mro(self, exception_class, name, route_name):
+        for ancestor in type.mro(exception_class):
+            exception_key = (ancestor, name)
+            if exception_key in self.cached_handlers:
+                handler = self.cached_handlers[exception_key]
+                self.cached_handlers[(exception_class, route_name)] = handler
+                return handler
+            if ancestor is BaseException:
+                break
+        return None
 
     _lookup = _full_lookup
 

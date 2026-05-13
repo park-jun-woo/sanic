@@ -1,3 +1,6 @@
+# ff:func feature=cli type=handler control=sequence
+# ff:what Entry point for python -m sanic
+
 import tracerite
 
 try:

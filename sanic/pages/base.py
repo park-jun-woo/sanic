@@ -1,3 +1,7 @@
+# ff:type feature=page type=page
+# ff:what Abstract base page class providing HTML rendering with header, body,
+
+
 from abc import ABC, abstractmethod
 
 from html5tagger import HTML, Builder, Document
@@ -44,6 +48,23 @@ class BasePage(ABC, metaclass=CSS):  # no cov
         with self.doc.header:
             self.doc.div(self.HEADING or self.TITLE)
 
+    _DEBUG_LINKS = (
+        ("Docs", "https://sanic.dev"),
+        ("Help", "https://sanic.dev/en/help.html"),
+        ("GitHub", "https://github.com/sanic-org/sanic"),
+    )
+
+    def _render_debug_links(self) -> None:
+        for idx, (title, href) in enumerate(self._DEBUG_LINKS):
+            if idx > 0:
+                self.doc(" | ")
+            self.doc.a(
+                title,
+                href=href,
+                target="_blank",
+                referrerpolicy="no-referrer",
+            )
+
     def _foot(self) -> None:
         with self.doc.footer:
             self.doc.div("powered by")
@@ -52,21 +73,7 @@ class BasePage(ABC, metaclass=CSS):  # no cov
             if self.debug:
                 self.doc.div(f"Version {VERSION}")
                 with self.doc.div:
-                    for idx, (title, href) in enumerate(
-                        (
-                            ("Docs", "https://sanic.dev"),
-                            ("Help", "https://sanic.dev/en/help.html"),
-                            ("GitHub", "https://github.com/sanic-org/sanic"),
-                        )
-                    ):
-                        if idx > 0:
-                            self.doc(" | ")
-                        self.doc.a(
-                            title,
-                            href=href,
-                            target="_blank",
-                            referrerpolicy="no-referrer",
-                        )
+                    self._render_debug_links()
                 self.doc.div("DEBUG mode")
 
     @abstractmethod

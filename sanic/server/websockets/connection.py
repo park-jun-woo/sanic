@@ -1,8 +1,9 @@
+# ff:type feature=websocket type=handler
+# ff:what ASGI WebSocket connection adapter providing send, receive, and accept
 from collections.abc import Awaitable, MutableMapping
 from typing import Any, Callable
 
 from sanic.exceptions import InvalidUsage
-
 
 ASGIMessage = MutableMapping[str, Any]
 
@@ -57,11 +58,10 @@ class WebSocketConnection:
 
     async def accept(self, subprotocols: list[str] | None = None) -> None:
         subprotocol = None
-        if subprotocols:
-            for subp in subprotocols:
-                if subp in self.subprotocols:
-                    subprotocol = subp
-                    break
+        for subp in subprotocols or []:
+            if subp in self.subprotocols:
+                subprotocol = subp
+                break
 
         await self._send(
             {

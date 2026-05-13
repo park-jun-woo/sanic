@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing signal registration and dispatching for event-driven
+
+
 from __future__ import annotations
 
 from collections.abc import Coroutine

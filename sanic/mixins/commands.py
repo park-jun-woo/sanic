@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing custom command registration decorator for Sanic appli
+
+
 from __future__ import annotations
 
 from functools import wraps

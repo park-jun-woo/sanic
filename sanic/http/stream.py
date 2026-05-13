@@ -1,9 +1,10 @@
+# ff:type feature=http type=model
+# ff:what Abstract base stream interface for HTTP request/response data flow
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from sanic.http.constants import Stage
-
 
 if TYPE_CHECKING:
     from sanic.response import BaseHTTPResponse

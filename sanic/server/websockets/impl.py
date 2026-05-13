@@ -1,3 +1,5 @@
+# ff:type feature=websocket type=protocol
+# ff:what WebSocket implementation protocol managing send, receive, ping, and c
 import asyncio
 import secrets
 
@@ -9,7 +11,6 @@ from websockets.exceptions import (
     ConnectionClosedOK,
 )
 from websockets.frames import Frame, Opcode
-
 
 try:  # websockets >= 11.0
     from websockets.protocol import Event, State  # type: ignore
@@ -25,7 +26,6 @@ from sanic.server.protocols.base_protocol import SanicProtocol
 
 from ...exceptions import ServerError, WebsocketClosed
 from .frame import WebsocketFrameAssembler
-
 
 OPEN = State.OPEN
 CLOSING = State.CLOSING
@@ -186,32 +186,35 @@ class WebsocketImplProtocol:
         # from processing at the same time
         async with self.process_event_mutex:
             for event in events:
-                if not isinstance(event, Frame):
-                    # Event is not a frame. Ignore it.
-                    continue
-                if event.opcode == Opcode.PONG:
-                    await self.process_pong(event)
-                elif event.opcode == Opcode.CLOSE:
-                    if self.recv_cancel:
-                        self.recv_cancel.cancel()
-                else:
-                    await self.assembler.put(event)
+                await self._process_single_event(event)
+
+    async def _process_single_event(self, event: Event) -> None:
+        if not isinstance(event, Frame):
+            return
+        if event.opcode == Opcode.PONG:
+            await self.process_pong(event)
+        elif event.opcode == Opcode.CLOSE:
+            if self.recv_cancel:
+                self.recv_cancel.cancel()
+        else:
+            await self.assembler.put(event)
 
     async def process_pong(self, frame: Frame) -> None:
-        if frame.data in self.pings:
-            # Acknowledge all pings up to the one matching this pong.
-            ping_ids = []
-            for ping_id, ping in self.pings.items():
-                ping_ids.append(ping_id)
-                if not ping.done():
-                    ping.set_result(None)
-                if ping_id == frame.data:
-                    break
-            else:  # noqa
-                raise ServerError("ping_id is not in self.pings")
-            # Remove acknowledged pings from self.pings.
-            for ping_id in ping_ids:
-                del self.pings[ping_id]
+        if frame.data not in self.pings:
+            return
+        # Acknowledge all pings up to the one matching this pong.
+        ping_ids = []
+        for ping_id, ping in self.pings.items():
+            ping_ids.append(ping_id)
+            if not ping.done():
+                ping.set_result(None)
+            if ping_id == frame.data:
+                break
+        else:  # noqa
+            raise ServerError("ping_id is not in self.pings")
+        # Remove acknowledged pings from self.pings.
+        for ping_id in ping_ids:
+            del self.pings[ping_id]
 
     async def keepalive_ping(self) -> None:
         """
@@ -282,6 +285,29 @@ class WebsocketImplProtocol:
         # We were never open, or already closed
         return True
 
+    def _flush_data_to_send(self):
+        """Write buffered data to the transport."""
+        try:
+            data_to_send = self.ws_proto.data_to_send()
+            while (
+                len(data_to_send) and self.io_proto and self.io_proto.transport
+            ):
+                frame_data = data_to_send.pop(0)
+                self.io_proto.transport.write(frame_data)
+        except Exception:
+            ...
+
+    def _send_fail_frames(self, code: int, reason: str) -> None:
+        """Send close/fail frames and pause reading on the transport."""
+        self.io_proto.transport.pause_reading()
+        _ = self.ws_proto.data_to_send()
+        if self.ws_proto.state is OPEN:
+            if code in (1000, 1001):
+                self.ws_proto.send_close(code, reason)
+            else:
+                self.ws_proto.fail(code, reason)
+            self._flush_data_to_send()
+
     def fail_connection(self, code: int = 1006, reason: str = "") -> bool:
         """
         Fail the WebSocket Connection
@@ -296,36 +322,7 @@ class WebsocketImplProtocol:
         (The specification describes these steps in the opposite order.)
         """
         if self.io_proto and self.io_proto.transport:
-            # Stop new data coming in
-            # In Python Version 3.7: pause_reading is idempotent
-            # ut can be called when the transport is already paused or closed
-            self.io_proto.transport.pause_reading()
-
-            # Keeping fail_connection() synchronous guarantees it can't
-            # get stuck and simplifies the implementation of the callers.
-            # Not draining the write buffer is acceptable in this context.
-
-            # clear the send buffer
-            _ = self.ws_proto.data_to_send()
-            # If we're not already CLOSED or CLOSING, then send the close.
-            if self.ws_proto.state is OPEN:
-                if code in (1000, 1001):
-                    self.ws_proto.send_close(code, reason)
-                else:
-                    self.ws_proto.fail(code, reason)
-                try:
-                    data_to_send = self.ws_proto.data_to_send()
-                    while (
-                        len(data_to_send)
-                        and self.io_proto
-                        and self.io_proto.transport
-                    ):
-                        frame_data = data_to_send.pop(0)
-                        self.io_proto.transport.write(frame_data)
-                except Exception:
-                    # sending close frames may fail if the
-                    # transport closes during this period
-                    ...
+            self._send_fail_frames(code, reason)
         if code == 1006:
             # Special case: 1006 consider the transport already closed
             self.ws_proto.state = CLOSED
@@ -337,6 +334,26 @@ class WebsocketImplProtocol:
             return self._force_disconnect()
         return False
 
+    def _send_close_frames(self, code, reason):
+        """Send close frames gracefully on the transport."""
+        self.io_proto.transport.pause_reading()
+        if self.ws_proto.state == OPEN:
+            data_to_send = self.ws_proto.data_to_send()
+            self.ws_proto.send_close(code, reason)
+            data_to_send.extend(self.ws_proto.data_to_send())
+            self._flush_pending_data(data_to_send)
+
+    def _flush_pending_data(self, data_to_send):
+        """Flush a specific list of pending data to the transport."""
+        try:
+            while (
+                len(data_to_send) and self.io_proto and self.io_proto.transport
+            ):
+                frame_data = data_to_send.pop(0)
+                self.io_proto.transport.write(frame_data)
+        except Exception:
+            ...
+
     def end_connection(self, code=1000, reason=""):
         # This is like slightly more graceful form of fail_connection
         # Use this instead of close() when you need an immediate
@@ -345,34 +362,11 @@ class WebsocketImplProtocol:
         if code == 1006 or not self.io_proto or not self.io_proto.transport:
             return self.fail_connection(code, reason)
 
-        # Stop new data coming in
-        # In Python Version 3.7: pause_reading is idempotent
-        # i.e. it can be called when the transport is already paused or closed.
-        self.io_proto.transport.pause_reading()
-        if self.ws_proto.state == OPEN:
-            data_to_send = self.ws_proto.data_to_send()
-            self.ws_proto.send_close(code, reason)
-            data_to_send.extend(self.ws_proto.data_to_send())
-            try:
-                while (
-                    len(data_to_send)
-                    and self.io_proto
-                    and self.io_proto.transport
-                ):
-                    frame_data = data_to_send.pop(0)
-                    self.io_proto.transport.write(frame_data)
-            except Exception:
-                # sending close frames may fail if the
-                # transport closes during this period
-                # But that doesn't matter at this point
-                ...
+        self._send_close_frames(code, reason)
         if self.data_finished_fut and not self.data_finished_fut.done():
-            # We have the ability to signal the auto-closer
-            # try to trigger it to auto-close the connection
             self.data_finished_fut.cancel()
             self.data_finished_fut = None
         if (not self.auto_closer_task) or self.auto_closer_task.done():
-            # Auto-closer is not running, do force disconnect
             return self._force_disconnect()
         return False
 
@@ -418,9 +412,10 @@ class WebsocketImplProtocol:
                     self.io_proto.transport.write_eof()
                 except RuntimeError:
                     ...
-                if self.connection_lost_waiter:
-                    if await self.wait_for_connection_lost(timeout=0):
-                        return
+                if self.connection_lost_waiter and (
+                    await self.wait_for_connection_lost(timeout=0)
+                ):
+                    return
         except asyncio.CancelledError:
             ...
         except BaseException:
@@ -610,8 +605,7 @@ class WebsocketImplProtocol:
                 done_task = next(iter(done))
                 if done_task is self.recv_cancel:
                     # recv_burst was cancelled
-                    for p in pending:
-                        p.cancel()
+                    [p.cancel() for p in pending]
                     raise asyncio.CancelledError()
                 m = done_task.result()
                 if m is None:
@@ -794,19 +788,20 @@ class WebsocketImplProtocol:
             if data:
                 await self.io_proto.send(data)
             else:
-                # Send an EOF - We don't actually send it,
-                # just trigger to autoclose the connection
-                if (
-                    self.auto_closer_task
-                    and not self.auto_closer_task.done()
-                    and self.data_finished_fut
-                    and not self.data_finished_fut.done()
-                ):
-                    # Auto-close the connection
-                    self.data_finished_fut.set_result(None)
-                else:
-                    # This will fail the connection appropriately
-                    SanicProtocol.close(self.io_proto, timeout=1.0)
+                self._handle_eof_signal()
+
+    def _handle_eof_signal(self):
+        """Handle EOF signal in the send data pipeline."""
+        can_auto_close = (
+            self.auto_closer_task
+            and not self.auto_closer_task.done()
+            and self.data_finished_fut
+            and not self.data_finished_fut.done()
+        )
+        if can_auto_close:
+            self.data_finished_fut.set_result(None)
+        else:
+            SanicProtocol.close(self.io_proto, timeout=1.0)
 
     async def async_data_received(self, data_to_send, events_to_process):
         if self.ws_proto.state in (OPEN, CLOSING) and len(data_to_send) > 0:

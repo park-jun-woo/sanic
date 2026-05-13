@@ -1,25 +1,8 @@
-from enum import IntEnum, auto
+# F5 exempt: re-export hub
+from sanic.worker.process_state import ProcessState
+from sanic.worker.restart_order import RestartOrder
 
-from sanic.compat import UpperStrEnum
-
-
-class RestartOrder(UpperStrEnum):
-    """Available restart orders."""
-
-    SHUTDOWN_FIRST = auto()
-    STARTUP_FIRST = auto()
-
-
-class ProcessState(IntEnum):
-    """Process states."""
-
-    NONE = auto()
-    IDLE = auto()
-    RESTARTING = auto()
-    STARTING = auto()
-    STARTED = auto()
-    ACKED = auto()
-    JOINED = auto()
-    TERMINATED = auto()
-    FAILED = auto()
-    COMPLETED = auto()
+__all__ = (
+    "ProcessState",
+    "RestartOrder",
+)

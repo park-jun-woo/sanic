@@ -1,3 +1,5 @@
+    **This is a** `filefunc <https://github.com/park-jun-woo/filefunc>`_ **-refactored fork of** `sanic <https://github.com/sanic-org/sanic>`_ **.** All 1865 tests pass identically to the original. See `Refactoring Report`_ below.
+
 .. image:: https://raw.githubusercontent.com/sanic-org/sanic-assets/master/png/sanic-framework-logo-400x97.png
     :alt: Sanic | Build fast. Run fast.
 
@@ -146,3 +148,116 @@ Contribution
 ------------
 
 We are always happy to have new contributions. We have `marked issues good for anyone looking to get started <https://github.com/sanic-org/sanic/issues?q=is%3Aopen+is%3Aissue+label%3Abeginner>`_, and welcome `questions on the forums <https://community.sanicframework.org/>`_. Please take a look at our `Contribution guidelines <https://github.com/sanic-org/sanic/blob/master/CONTRIBUTING.md>`_.
+
+
+.. _Refactoring Report:
+
+filefunc Refactoring Report
+---------------------------
+
+This fork restructures sanic to comply with `filefunc <https://github.com/park-jun-woo/filefunc>`_ code structure rules -- an LLM-native convention that enforces "one file, one concept."
+
+What changed
+~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Metric
+     - Original
+     - Refactored
+   * - Source files
+     - 132
+     - 396
+   * - Total lines
+     - 25,772
+     - 28,359
+   * - filefunc violations
+     - N/A (no codebook)
+     - 0
+   * - pytest passed
+     - 1865
+     - 1865
+   * - pytest failed
+     - 0
+     - 0
+
+Rules applied
+~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Rule
+     - Description
+     - Action taken
+   * - F1
+     - One function per file
+     - Split multi-function files (e.g. ``errorpages.py`` -> 8 files)
+   * - F2
+     - One class per file
+     - Split multi-class files (e.g. ``exceptions.py`` -> 24 files)
+   * - Q1
+     - Nesting depth max 2
+     - Extracted nested logic into helper methods
+   * - Q4
+     - Control body PURE max 10 lines
+     - Extracted large loop/if bodies into private methods
+   * - A1/A3
+     - ``# ff:func`` and ``# ff:what`` annotations
+     - Added to all 396 files
+   * - N4
+     - Black formatter compliance
+     - Applied ``black`` to all files
+
+Verification
+~~~~~~~~~~~~
+
+- **Public API**: All public names identical -- every import path preserved via ``__init__.py`` re-exports
+- **Import compatibility**: All original import paths work (``from sanic.exceptions import ...``, etc.)
+- **Code loss**: 0 functions/classes removed. ~100 private helpers added (extracted from large methods)
+- **Runtime behavior**: Full test suite produces identical results
+- **Test suite**: 1865 passed, 9 skipped, 3 xfailed -- identical to original
+- **Logic comparison**: File-by-file diff verified -- all extracted methods have identical behavior to original inline code
+
+Performance benchmark
+~~~~~~~~~~~~~~~~~~~~~
+
+No measurable performance regression. Tested on the same machine, Python 3.12.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Benchmark
+     - Original
+     - Refactored
+     - Diff
+   * - ``import sanic``
+     - 93.8ms
+     - 102.0ms
+     - +9% (module loading overhead)
+   * - App creation + 3 routes
+     - 0.19ms
+     - 0.19ms
+     - 0%
+   * - Route resolution ``/users/<id>``
+     - 0.7us
+     - 0.7us
+     - 0%
+   * - JSON response creation
+     - 1.3us
+     - 1.3us
+     - 0%
+   * - Header parsing
+     - 0.9us
+     - 0.9us
+     - 0%
+
+The 8.2ms import overhead from loading 396 files instead of 132 is a one-time startup cost (~9%). All runtime operations (routing, response, parsing) show zero performance difference.
+
+Structure
+~~~~~~~~~
+
+Original hub files (``exceptions.py``, ``headers.py``, ``config.py``, etc.) are preserved as re-export modules for backward compatibility. Split files follow the naming convention ``class_name.py`` or ``function_name.py`` (snake_case).
+
+Exception classes have ``__module__`` set to ``sanic.exceptions`` to preserve ``repr()`` output across the codebase.

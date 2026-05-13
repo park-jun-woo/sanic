@@ -1,3 +1,5 @@
+# ff:func feature=worker type=runner control=sequence
+# ff:what Initialize and run the Sanic app within a worker process with full li
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +51,16 @@ def worker_serve(
     config: bytes | str | dict[str, Any] | Any | None = None,
     passthru: dict[str, Any] | None = None,
 ):
+    def _hydrate_server_info(server_info, Sanic):
+        for name, server_info_objects in server_info.items():
+            a = Sanic.get_app(name)
+            if a.state.server_info:
+                continue
+            a.state.server_info = []
+            for info in server_info_objects:
+                info.settings.setdefault("app", a)
+                a.state.server_info.append(info)
+
     try:
         from sanic import Sanic
 
@@ -68,14 +80,7 @@ def worker_serve(
 
         # Hydrate server info if needed
         if server_info:
-            for app_name, server_info_objects in server_info.items():
-                a = Sanic.get_app(app_name)
-                if not a.state.server_info:
-                    a.state.server_info = []
-                    for info in server_info_objects:
-                        if not info.settings.get("app"):
-                            info.settings["app"] = a
-                        a.state.server_info.append(info)
+            _hydrate_server_info(server_info, Sanic)
 
         if isinstance(ssl, dict) or app.certloader_class is not CertLoader:
             cert_loader = app.certloader_class(ssl or {})

@@ -1,3 +1,7 @@
+# ff:type feature=request type=model
+# ff:what Dictionary subclass for request parameters where get returns first va
+
+
 from __future__ import annotations
 
 from typing import Any

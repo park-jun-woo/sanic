@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing HTTP route registration decorators for GET, POST, PUT
+
+
 from __future__ import annotations
 
 from ast import NodeVisitor, Return, parse
@@ -20,7 +24,6 @@ from sanic.mixins.base import BaseMixin
 from sanic.models.futures import FutureRoute, FutureStatic
 from sanic.models.handler_types import RouteHandler
 from sanic.types import HashableDict
-
 
 RouteWrapper = Callable[
     [RouteHandler], RouteHandler | tuple[Route, RouteHandler]
@@ -277,15 +280,7 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
         """  # noqa: E501
         # Handle HTTPMethodView differently
         if hasattr(handler, "view_class"):
-            methods = set()
-
-            for method in HTTP_METHODS:
-                view_class = getattr(handler, "view_class")
-                _handler = getattr(view_class, method.lower(), None)
-                if _handler:
-                    methods.add(method)
-                    if hasattr(_handler, "is_stream"):
-                        stream = True
+            methods, stream = self._resolve_view_methods(handler, stream)
 
         if strict_slashes is None:
             strict_slashes = self.strict_slashes
@@ -767,6 +762,19 @@ class RouteMixin(BaseMixin, metaclass=SanicMeta):
             error_format=error_format,
             **ctx_kwargs,
         )(handler)
+
+    @staticmethod
+    def _resolve_view_methods(handler, stream):
+        methods = set()
+        view_class = getattr(handler, "view_class")
+        for method in HTTP_METHODS:
+            _handler = getattr(view_class, method.lower(), None)
+            if not _handler:
+                continue
+            methods.add(method)
+            if hasattr(_handler, "is_stream"):
+                stream = True
+        return methods, stream
 
     def _determine_error_format(self, handler) -> str:
         with suppress(OSError, TypeError):

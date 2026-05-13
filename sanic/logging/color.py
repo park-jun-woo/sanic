@@ -1,3 +1,7 @@
+# ff:type feature=logging type=constant
+# ff:what Color enum and level-to-color mapping for terminal log output
+
+
 import logging
 import os
 import sys
@@ -6,7 +10,6 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from sanic.helpers import is_atty
-
 
 # Python 3.11 changed the way Enum formatting works for mixed-in types.
 if sys.version_info < (3, 11, 0):

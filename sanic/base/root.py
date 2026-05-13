@@ -1,3 +1,7 @@
+# ff:type feature=base type=model
+# ff:what Base class for all Sanic instances combining route, static, middlewar
+
+
 import re
 
 from typing import Any
@@ -11,7 +15,6 @@ from sanic.mixins.middleware import MiddlewareMixin
 from sanic.mixins.routes import RouteMixin
 from sanic.mixins.signals import SignalMixin
 from sanic.mixins.static import StaticMixin
-
 
 VALID_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_\-]*$")
 

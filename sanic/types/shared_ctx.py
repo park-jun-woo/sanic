@@ -1,3 +1,7 @@
+# ff:type feature=worker type=model
+# ff:what Shared context namespace for cross-worker data with safety checks for
+
+
 import os
 
 from collections.abc import Iterable
@@ -29,6 +33,18 @@ class SharedContext(SimpleNamespace):
                 self._check(name, item)
         super().__setattr__(name, value)
 
+    @staticmethod
+    def _warn_unsafe(name: str, value: Any) -> None:
+        error_logger.warning(
+            f"{Colors.YELLOW}Unsafe object {Colors.PURPLE}{name} "
+            f"{Colors.YELLOW}with type {Colors.PURPLE}{type(value)} "
+            f"{Colors.YELLOW}was added to shared_ctx. It may not "
+            "not function as intended. Consider using the regular "
+            f"ctx.\nFor more information, please see https://sanic.dev/en"
+            "/guide/deployment/manager.html#using-shared-context-between-"
+            f"worker-processes.{Colors.END}"
+        )
+
     def _check(self, name: str, value: Any) -> None:
         if name in self.SAFE:
             return
@@ -40,15 +56,7 @@ class SharedContext(SimpleNamespace):
             module.startswith(prefix)
             for prefix in ("multiprocessing", "ctypes")
         ):
-            error_logger.warning(
-                f"{Colors.YELLOW}Unsafe object {Colors.PURPLE}{name} "
-                f"{Colors.YELLOW}with type {Colors.PURPLE}{type(value)} "
-                f"{Colors.YELLOW}was added to shared_ctx. It may not "
-                "not function as intended. Consider using the regular "
-                f"ctx.\nFor more information, please see https://sanic.dev/en"
-                "/guide/deployment/manager.html#using-shared-context-between-"
-                f"worker-processes.{Colors.END}"
-            )
+            self._warn_unsafe(name, value)
 
     @property
     def is_locked(self) -> bool:

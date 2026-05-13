@@ -1,3 +1,7 @@
+# ff:type feature=http type=handler
+# ff:what Parse and process incoming request headers to extract content range i
+
+
 from __future__ import annotations
 
 import os
@@ -10,7 +14,6 @@ from sanic.exceptions import (
     RangeNotSatisfiable,
 )
 from sanic.models.protocol_types import Range
-
 
 if TYPE_CHECKING:
     from sanic import Request

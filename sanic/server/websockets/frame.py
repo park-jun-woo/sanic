@@ -1,3 +1,5 @@
+# ff:type feature=websocket type=handler
+# ff:what Frame assembler that buffers and reassembles fragmented WebSocket mes
 import asyncio
 import codecs
 
@@ -8,7 +10,6 @@ from websockets.frames import Frame, Opcode
 from websockets.typing import Data
 
 from sanic.exceptions import ServerError
-
 
 if TYPE_CHECKING:
     from .impl import WebsocketImplProtocol
@@ -58,7 +59,9 @@ class WebsocketFrameAssembler:
         self.read_mutex = asyncio.Lock()
         self.write_mutex = asyncio.Lock()
 
-        self.completed_queue = asyncio.Queue(maxsize=1)  # type: asyncio.Queue[Data]
+        self.completed_queue = asyncio.Queue(
+            maxsize=1
+        )  # type: asyncio.Queue[Data]
 
         # put() sets this event to tell get() that a message can be fetched.
         self.message_complete = asyncio.Event()

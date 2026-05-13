@@ -1,3 +1,5 @@
+# ff:type feature=worker type=handler
+# ff:what Process restarter that handles transient and durable worker restart l
 from __future__ import annotations
 
 from sanic.log import error_logger

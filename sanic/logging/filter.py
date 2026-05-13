@@ -1,3 +1,7 @@
+# ff:type feature=logging type=filter
+# ff:what Log filter that suppresses records exceeding the configured verbosity
+
+
 import logging
 
 

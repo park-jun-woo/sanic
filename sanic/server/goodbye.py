@@ -1,8 +1,9 @@
+# ff:func feature=server type=util control=sequence
+# ff:what Select a random goodbye phrase respecting terminal encoding
 # flake8: noqa: E501
 
 import random
 import sys
-
 
 # fmt: off
 ascii_phrases = {

@@ -1,11 +1,13 @@
+# ff:type feature=cli type=util
+# ff:what Terminal spinner with cursor hide/show for loading indication
+
+
 import os
 import sys
 import time
 
-from contextlib import contextmanager
 from queue import Queue
 from threading import Thread
-
 
 if os.name == "nt":  # noqa
     import ctypes  # noqa
@@ -80,11 +82,3 @@ class Spinner:  # noqa
         elif os.name == "posix":
             sys.stdout.write("\033[?25h")
             sys.stdout.flush()
-
-
-@contextmanager
-def loading(message: str = "Loading"):  # noqa
-    spinner = Spinner(message)
-    spinner.start()
-    yield
-    spinner.stop()

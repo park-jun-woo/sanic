@@ -1,0 +1,10 @@
+tests/
+docs/
+examples/
+guide/
+docker/
+scripts/
+changelogs/
+.github/
+.venv/
+setup.py

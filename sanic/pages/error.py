@@ -1,3 +1,7 @@
+# ff:type feature=page type=page
+# ff:what Error page rendering with traceback display, context details, and deb
+
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,7 +13,6 @@ from tracerite import html_traceback, inspector
 from sanic.request import Request
 
 from .base import BasePage
-
 
 # Avoid showing the request in the traceback variable inspectors
 inspector.blacklist_types += (Request,)

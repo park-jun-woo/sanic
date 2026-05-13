@@ -1,3 +1,5 @@
+# ff:type feature=cli type=handler
+# ff:what CLI entry point class that parses arguments and dispatches to sub-com
 from __future__ import annotations
 
 import os
@@ -212,18 +214,15 @@ Advanced daemon management:
         elif parse_args == ["-v"]:
             parse_args = ["--version"]
 
+        if not legacy_version and self.run_mode == "exec":
+            parse_args = [
+                a
+                for a in (parse_args or sys.argv[1:])
+                if a not in "-h --help".split()
+            ]
         if not legacy_version:
-            if self.run_mode == "exec":
-                parse_args = [
-                    a
-                    for a in (parse_args or sys.argv[1:])
-                    if a not in "-h --help".split()
-                ]
             parsed, unknown = self.parser.parse_known_args(args=parse_args)
-            if unknown and parsed.factory:
-                for arg in unknown:
-                    if arg.startswith("--"):
-                        self.parser.add_argument(arg.split("=")[0])
+            self._add_factory_args(parsed, unknown)
 
         if self.run_mode == "exec":
             self.args, _ = self.parser.parse_known_args(args=parse_args)
@@ -249,14 +248,14 @@ Advanced daemon management:
             daemon = None
             if getattr(self.args, "daemon", False):
                 daemon = self._setup_daemon(app.name)
-                if daemon:
-                    lines = ["Starting Sanic in daemon mode..."]
-                    if daemon.pidfile:
-                        lines.append(f"  PID file: {daemon.pidfile}")
-                    if daemon.logfile:
-                        lines.append(f"  Logs: {daemon.logfile}")
-                    print("\n".join(lines), flush=True)
-                    daemon.daemonize()
+            if daemon:
+                lines = ["Starting Sanic in daemon mode..."]
+                if daemon.pidfile:
+                    lines.append(f"  PID file: {daemon.pidfile}")
+                if daemon.logfile:
+                    lines.append(f"  Logs: {daemon.logfile}")
+                print("\n".join(lines), flush=True)
+                daemon.daemonize()
 
             if self.args.repl:
                 self._repl(app)
@@ -272,23 +271,30 @@ Advanced daemon management:
                 serve = partial(Sanic.serve, app_loader=app_loader)
             serve(app)
 
+    def _add_factory_args(self, parsed, unknown):
+        if not (unknown and parsed.factory):
+            return
+        for arg in unknown:
+            if arg.startswith("--"):
+                self.parser.add_argument(arg.split("=")[0])
+
+    @staticmethod
+    def _parse_unknown_arg(arg):
+        try:
+            key, value = arg.split("=")
+            key = key.lstrip("-")
+        except ValueError:
+            value = False if arg.startswith("--no-") else True
+            key = arg.replace("--no-", "").lstrip("-").replace("-", "_")
+        return key, value
+
     def _inspector(self):
         args = sys.argv[2:]
         self.args, unknown = self.parser.parse_known_args(args=args)
-        if unknown:
-            for arg in unknown:
-                if arg.startswith("--"):
-                    try:
-                        key, value = arg.split("=")
-                        key = key.lstrip("-")
-                    except ValueError:
-                        value = False if arg.startswith("--no-") else True
-                        key = (
-                            arg.replace("--no-", "")
-                            .lstrip("-")
-                            .replace("-", "_")
-                        )
-                    setattr(self.args, key, value)
+        for arg in unknown:
+            if arg.startswith("--"):
+                key, value = self._parse_unknown_arg(arg)
+                setattr(self.args, key, value)
 
         kwargs = {**self.args.__dict__}
         host = kwargs.pop("host")
@@ -409,9 +415,8 @@ Advanced daemon management:
             error_logger.error(f"Daemon configuration error: {e}")
             sys.exit(1)
 
-    def _precheck(self):
-        # Custom TLS mismatch handling for better diagnostics
-        if self.main_process and (
+    def _has_tls_mismatch(self):
+        return self.main_process and (
             # one of cert/key missing
             bool(self.args.cert) != bool(self.args.key)
             # new and old style self.args used together
@@ -421,7 +426,11 @@ Advanced daemon management:
             or self.args.tlshost
             and not self.args.tls
             and not self.args.cert
-        ):
+        )
+
+    def _precheck(self):
+        # Custom TLS mismatch handling for better diagnostics
+        if self._has_tls_mismatch():
             self.parser.print_usage(sys.stderr)
             message = (
                 "TLS certificates must be specified by either of:\n"

@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing server startup, run, and serve methods with multi-wor
+
+
 from __future__ import annotations
 
 import os
@@ -66,7 +70,6 @@ from sanic.worker.manager import WorkerManager
 from sanic.worker.multiplexer import WorkerMultiplexer
 from sanic.worker.reloader import Reloader
 from sanic.worker.serve import worker_serve
-
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -390,17 +393,13 @@ class StartupMixin(metaclass=SanicMeta):
         if motd_display:
             self.config.MOTD_DISPLAY.update(motd_display)
 
-        if reload_dir:
-            if isinstance(reload_dir, str):
-                reload_dir = [reload_dir]
-
-            for directory in reload_dir:
-                direc = Path(directory)
-                if not direc.is_dir():
-                    logger.warning(
-                        f"Directory {directory} could not be located"
-                    )
-                self.state.reload_dirs.add(Path(directory))
+        if isinstance(reload_dir, str):
+            reload_dir = [reload_dir]
+        for directory in reload_dir or []:
+            direc = Path(directory)
+            if not direc.is_dir():
+                logger.warning(f"Directory {directory} could not be located")
+            self.state.reload_dirs.add(Path(directory))
 
         if loop is not None:
             raise TypeError(
@@ -618,14 +617,18 @@ class StartupMixin(metaclass=SanicMeta):
             self.multiplexer.terminate()
         if self.state.stage is not ServerStage.STOPPED:
             self.shutdown_tasks(timeout=0)  # type: ignore
-            for task in all_tasks():
-                with suppress(AttributeError):
-                    if task.get_name() == "RunServer":
-                        task.cancel()
+            self._cancel_run_server_tasks()
             get_event_loop().stop()
 
         if unregister:
             self.__class__.unregister_app(self)  # type: ignore
+
+    @staticmethod
+    def _cancel_run_server_tasks():
+        for task in all_tasks():
+            with suppress(AttributeError):
+                if task.get_name() == "RunServer":
+                    task.cancel()
 
     def _helper(
         self,
@@ -997,21 +1000,19 @@ class StartupMixin(metaclass=SanicMeta):
         if factory:
             primary = factory()
         else:
+            if not primary and app_loader:
+                primary = app_loader.load()
             if not primary:
-                if app_loader:
-                    primary = app_loader.load()
-                if not primary:
-                    try:
-                        primary = apps[0]
-                    except IndexError:
-                        raise RuntimeError(
-                            "Did not find any applications."
-                        ) from None
+                try:
+                    primary = apps[0]
+                except IndexError:
+                    raise RuntimeError(
+                        "Did not find any applications."
+                    ) from None
 
             # This exists primarily for unit testing
             if not primary.state.server_info:  # no cov
-                for app in apps:
-                    app.state.server_info.clear()
+                cls._clear_server_info(apps)
                 return
 
         try:
@@ -1186,16 +1187,7 @@ class StartupMixin(metaclass=SanicMeta):
             cls._cleanup_apps()
 
             if workers_started:
-                limit = 100
-                while cls._get_process_states(worker_state):
-                    sleep(0.1)
-                    limit -= 1
-                    if limit <= 0:
-                        error_logger.warning(
-                            "Worker shutdown timed out. "
-                            "Some processes may still be running."
-                        )
-                        break
+                cls._wait_for_workers(worker_state)
             sync_manager.shutdown()
             unix = kwargs.get("unix")
             if unix:
@@ -1203,6 +1195,24 @@ class StartupMixin(metaclass=SanicMeta):
             logger.debug(get_goodbye())
         if exit_code:
             os._exit(exit_code)
+
+    @staticmethod
+    def _clear_server_info(apps):
+        for app in apps:
+            app.state.server_info.clear()
+
+    @classmethod
+    def _wait_for_workers(cls, worker_state):
+        limit = 100
+        while cls._get_process_states(worker_state):
+            sleep(0.1)
+            limit -= 1
+            if limit <= 0:
+                error_logger.warning(
+                    "Worker shutdown timed out. "
+                    "Some processes may still be running."
+                )
+                break
 
     @staticmethod
     def _get_process_states(worker_state) -> list[str]:
@@ -1315,85 +1325,88 @@ class StartupMixin(metaclass=SanicMeta):
             cls._cleanup_env_vars()
             cls._cleanup_apps()
 
+    @staticmethod
+    def _warn_worker_mismatch(app, primary):
+        if not (
+            app.name is not primary.name
+            and app.state.workers != primary.state.workers
+            and app.state.server_info
+        ):
+            return
+        message = (
+            f"The primary application {repr(primary)} is running "
+            f"with {primary.state.workers} worker(s). All "
+            "application instances will run with the same number. "
+            f"You requested {repr(app)} to run with "
+            f"{app.state.workers} worker(s), which will be ignored "
+            "in favor of the primary application."
+        )
+        if is_atty():
+            message = "".join([Colors.YELLOW, message, Colors.END])
+        error_logger.warning(message, exc_info=True)
+
     async def _start_servers(
         self,
         primary: Sanic,
         apps: list[Sanic],
     ) -> None:
         for app in apps:
-            if (
-                app.name is not primary.name
-                and app.state.workers != primary.state.workers
-                and app.state.server_info
-            ):
-                message = (
-                    f"The primary application {repr(primary)} is running "
-                    f"with {primary.state.workers} worker(s). All "
-                    "application instances will run with the same number. "
-                    f"You requested {repr(app)} to run with "
-                    f"{app.state.workers} worker(s), which will be ignored "
-                    "in favor of the primary application."
-                )
-                if is_atty():
-                    message = "".join(
-                        [
-                            Colors.YELLOW,
-                            message,
-                            Colors.END,
-                        ]
-                    )
-                error_logger.warning(message, exc_info=True)
-            for server_info in app.state.server_info:
-                if server_info.stage is not ServerStage.SERVING:
-                    app.state.primary = False
-                    handlers = [
-                        *server_info.settings.pop("main_start", []),
-                        *server_info.settings.pop("main_stop", []),
-                    ]
-                    if handlers:  # no cov
-                        error_logger.warning(
-                            f"Sanic found {len(handlers)} listener(s) on "
-                            "secondary applications attached to the main "
-                            "process. These will be ignored since main "
-                            "process listeners can only be attached to your "
-                            "primary application: "
-                            f"{repr(primary)}"
-                        )
+            self._warn_worker_mismatch(app, primary)
+            await self._start_app_servers(app, primary)
 
-                    if not server_info.settings["loop"]:
-                        server_info.settings["loop"] = get_running_loop()
+    async def _start_app_servers(self, app, primary) -> None:
+        for server_info in app.state.server_info:
+            if server_info.stage is not ServerStage.SERVING:
+                await self._start_secondary_server(app, server_info, primary)
 
-                    serve_args: dict[str, Any] = {
-                        **server_info.settings,
-                        "run_async": True,
-                        "reuse_port": bool(primary.state.workers - 1),
-                    }
-                    if "app" not in serve_args:
-                        serve_args["app"] = app
-                    try:
-                        server_info.server = await serve(**serve_args)
-                    except OSError as e:  # no cov
-                        first_message = (
-                            "An OSError was detected on startup. "
-                            "The encountered error was: "
-                        )
-                        second_message = str(e)
-                        if is_atty():
-                            message_parts = [
-                                Colors.YELLOW,
-                                first_message,
-                                Colors.RED,
-                                second_message,
-                                Colors.END,
-                            ]
-                        else:
-                            message_parts = [first_message, second_message]
-                        message = "".join(message_parts)
-                        error_logger.warning(message, exc_info=True)
-                        continue
-                    primary.add_task(
-                        self._run_server(app, server_info), name="RunServer"
-                    )
+    async def _start_secondary_server(self, app, server_info, primary) -> None:
+        app.state.primary = False
+        handlers = [
+            *server_info.settings.pop("main_start", []),
+            *server_info.settings.pop("main_stop", []),
+        ]
+        if handlers:  # no cov
+            error_logger.warning(
+                f"Sanic found {len(handlers)} listener(s) on "
+                "secondary applications attached to the main "
+                "process. These will be ignored since main "
+                "process listeners can only be attached to your "
+                "primary application: "
+                f"{repr(primary)}"
+            )
+
+        if not server_info.settings["loop"]:
+            server_info.settings["loop"] = get_running_loop()
+
+        serve_args: dict[str, Any] = {
+            **server_info.settings,
+            "run_async": True,
+            "reuse_port": bool(primary.state.workers - 1),
+        }
+        if "app" not in serve_args:
+            serve_args["app"] = app
+        try:
+            server_info.server = await serve(**serve_args)
+        except OSError as e:  # no cov
+            first_message = (
+                "An OSError was detected on startup. "
+                "The encountered error was: "
+            )
+            second_message = str(e)
+            if is_atty():
+                message_parts = [
+                    Colors.YELLOW,
+                    first_message,
+                    Colors.RED,
+                    second_message,
+                    Colors.END,
+                ]
+            else:
+                message_parts = [first_message, second_message]
+            message = "".join(message_parts)
+            error_logger.warning(message, exc_info=True)
+            return
+        primary.add_task(self._run_server(app, server_info), name="RunServer")
 
     async def _run_server(
         self,

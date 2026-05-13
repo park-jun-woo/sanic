@@ -1,3 +1,5 @@
+# ff:type feature=worker type=model
+# ff:what Worker state mapping with restricted key protection for process metad
 from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator, KeysView, Mapping, ValuesView

@@ -1,9 +1,12 @@
+# ff:func feature=core type=util control=sequence
+# ff:what Setup Sanic Extensions by importing and initializing the sanic_ext mo
+
+
 from __future__ import annotations
 
 from contextlib import suppress
 from importlib import import_module
 from typing import TYPE_CHECKING
-
 
 if TYPE_CHECKING:
     from sanic import Sanic

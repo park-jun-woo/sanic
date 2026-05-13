@@ -1,3 +1,7 @@
+# ff:type feature=mixin type=mixin
+# ff:what Mixin providing exception handler registration decorator for blueprin
+
+
 from __future__ import annotations
 
 from typing import Any, Callable

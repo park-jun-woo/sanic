@@ -1,3 +1,5 @@
+# ff:type feature=routing type=router
+# ff:what HTTP request router that maps URLs to handler functions
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -16,7 +18,6 @@ from sanic.constants import HTTP_METHODS
 from sanic.errorpages import check_error_format
 from sanic.exceptions import MethodNotAllowed, NotFound, SanicException
 from sanic.models.handler_types import RouteHandler
-
 
 ROUTER_CACHE_SIZE = 1024
 ALLOWED_LABELS = ("__file_uri__",)
@@ -43,9 +44,9 @@ class Router(BaseRouter):
             raise MethodNotAllowed(
                 f"Method {method} not allowed for URL {path}",
                 method=method,
-                allowed_methods=tuple(e.allowed_methods)
-                if e.allowed_methods
-                else None,
+                allowed_methods=(
+                    tuple(e.allowed_methods) if e.allowed_methods else None
+                ),
             ) from None
 
     @lru_cache(maxsize=ROUTER_CACHE_SIZE)
@@ -132,36 +133,56 @@ class Router(BaseRouter):
         else:
             hosts = host or [None]  # type: ignore
 
-        routes = []
-
-        for host in hosts:
-            if host:
-                params.update({"requirements": {"host": host}})
-
-            ident = name
-            if len(hosts) > 1:
-                ident = (
-                    f"{name}_{host.replace('.', '_')}"
-                    if name
-                    else "__unnamed__"
-                )
-
-            route = super().add(**params)  # type: ignore
-            route.extra.ident = ident
-            route.extra.ignore_body = ignore_body
-            route.extra.stream = stream
-            route.extra.hosts = hosts
-            route.extra.static = static
-            route.extra.error_format = error_format
-
-            if error_format:
-                check_error_format(route.extra.error_format)
-
-            routes.append(route)
+        routes = [
+            self._add_single_host(
+                h,
+                hosts,
+                params,
+                name,
+                ignore_body,
+                stream,
+                static,
+                error_format,
+            )
+            for h in hosts
+        ]
 
         if len(routes) == 1:
             return routes[0]
         return routes
+
+    def _add_single_host(
+        self,
+        host,
+        hosts,
+        params,
+        name,
+        ignore_body,
+        stream,
+        static,
+        error_format,
+    ):
+        if host:
+            params.update({"requirements": {"host": host}})
+
+        ident = name
+        if len(hosts) > 1:
+            ident = (
+                f"{name}_{host.replace('.', '_')}" if name else "__unnamed__"
+            )
+
+        route = super().add(**params)  # type: ignore
+        route.extra.ident = ident
+        route.extra.ignore_body = ignore_body
+        route.extra.stream = stream
+        route.extra.hosts = hosts
+        route.extra.static = static
+        route.extra.error_format = error_format
+
+        if error_format:
+            check_error_format(route.extra.error_format)
+
+        return route
 
     @lru_cache(maxsize=ROUTER_CACHE_SIZE)
     def find_route_by_view_name(
@@ -267,7 +288,6 @@ class Router(BaseRouter):
             if part.startswith("<") and ":" not in part:
                 name = part[1:-1]
                 annotation = mapping.get(name)
-                if annotation:
-                    part = f"<{name}:{annotation}>"
+                part = f"<{name}:{annotation}>" if annotation else part
             reconstruction.append(part)
         return "/".join(reconstruction)

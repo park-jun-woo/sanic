@@ -1,3 +1,5 @@
+# ff:type feature=core type=runner
+# ff:what Main Sanic application class for HTTP server lifecycle management
 from __future__ import annotations
 
 import asyncio
@@ -90,7 +92,6 @@ from sanic.worker.inspector import Inspector
 from sanic.worker.loader import CertLoader
 from sanic.worker.manager import WorkerManager
 
-
 if TYPE_CHECKING:
     try:
         from sanic_ext import Extend  # type: ignore
@@ -174,6 +175,8 @@ class Sanic(
         "handle_exception",
         "_run_response_middleware",
         "_run_request_middleware",
+        "_execute_request_middleware",
+        "_execute_response_middleware",
     )
     __slots__ = (
         "_asgi_app",
@@ -546,18 +549,28 @@ class Sanic(
             )
 
         if location is MiddlewareLocation.REQUEST:
-            for _rn in route_names:
-                if _rn not in self.named_request_middleware:
-                    self.named_request_middleware[_rn] = deque()
-                if middleware not in self.named_request_middleware[_rn]:
-                    self.named_request_middleware[_rn].append(middleware)
+            self._add_named_middleware(
+                self.named_request_middleware,
+                route_names,
+                middleware,
+                append_left=False,
+            )
         if location is MiddlewareLocation.RESPONSE:
-            for _rn in route_names:
-                if _rn not in self.named_response_middleware:
-                    self.named_response_middleware[_rn] = deque()
-                if middleware not in self.named_response_middleware[_rn]:
-                    self.named_response_middleware[_rn].appendleft(middleware)
+            self._add_named_middleware(
+                self.named_response_middleware,
+                route_names,
+                middleware,
+                append_left=True,
+            )
         return retval
+
+    @staticmethod
+    def _add_named_middleware(registry, route_names, middleware, append_left):
+        add = deque.appendleft if append_left else deque.append
+        for _rn in route_names:
+            registry.setdefault(_rn, deque())
+            if middleware not in registry[_rn]:
+                add(registry[_rn], middleware)
 
     def _apply_exception_handler(
         self,
@@ -571,11 +584,13 @@ class Sanic(
         """
 
         for exception in handler.exceptions:
-            if isinstance(exception, (tuple, list)):
-                for e in exception:
-                    self.error_handler.add(e, handler.handler, route_names)
-            else:
-                self.error_handler.add(exception, handler.handler, route_names)
+            exceptions = (
+                exception
+                if isinstance(exception, (tuple, list))
+                else [exception]
+            )
+            for e in exceptions:
+                self.error_handler.add(e, handler.handler, route_names)
         return handler.handler
 
     def _apply_listener(self, listener: FutureListener):
@@ -892,36 +907,7 @@ class Sanic(
         if name_prefix is not None:
             options["name_prefix"] = name_prefix
         if isinstance(blueprint, (Iterable, BlueprintGroup)):
-            for item in blueprint:
-                params: dict[str, Any] = {**options}
-                if isinstance(blueprint, BlueprintGroup):
-                    merge_from = [
-                        options.get("url_prefix", ""),
-                        blueprint.url_prefix or "",
-                    ]
-                    if not isinstance(item, BlueprintGroup):
-                        merge_from.append(item.url_prefix or "")
-                    merged_prefix = "/".join(
-                        str(u).strip("/") for u in merge_from if u
-                    ).rstrip("/")
-                    params["url_prefix"] = f"/{merged_prefix}"
-
-                    for _attr in ["version", "strict_slashes"]:
-                        if getattr(item, _attr) is None:
-                            params[_attr] = getattr(
-                                blueprint, _attr
-                            ) or options.get(_attr)
-                    if item.version_prefix == "/v":
-                        if blueprint.version_prefix == "/v":
-                            params["version_prefix"] = options.get(
-                                "version_prefix"
-                            )
-                        else:
-                            params["version_prefix"] = blueprint.version_prefix
-                    name_prefix = getattr(blueprint, "name_prefix", None)
-                    if name_prefix and "name_prefix" not in params:
-                        params["name_prefix"] = name_prefix
-                self.blueprint(item, **params)
+            self._register_blueprint_items(blueprint, options)
             return
         if blueprint.name in self.blueprints:
             assert self.blueprints[blueprint.name] is blueprint, (
@@ -938,6 +924,40 @@ class Sanic(
         ):
             blueprint.strict_slashes = self.strict_slashes
         blueprint.register(self, options)
+
+    def _register_blueprint_items(self, blueprint, options):
+        for item in blueprint:
+            params: dict[str, Any] = {**options}
+            if isinstance(blueprint, BlueprintGroup):
+                self._merge_blueprint_group_params(
+                    blueprint, item, options, params
+                )
+            self.blueprint(item, **params)
+
+    @staticmethod
+    def _merge_blueprint_group_params(blueprint, item, options, params):
+        merge_from = [
+            options.get("url_prefix", ""),
+            blueprint.url_prefix or "",
+        ]
+        if not isinstance(item, BlueprintGroup):
+            merge_from.append(item.url_prefix or "")
+        merged_prefix = "/".join(
+            str(u).strip("/") for u in merge_from if u
+        ).rstrip("/")
+        params["url_prefix"] = f"/{merged_prefix}"
+
+        for _attr in ["version", "strict_slashes"]:
+            if getattr(item, _attr) is None:
+                params[_attr] = getattr(blueprint, _attr) or options.get(_attr)
+        if item.version_prefix == "/v":
+            if blueprint.version_prefix == "/v":
+                params["version_prefix"] = options.get("version_prefix")
+            else:
+                params["version_prefix"] = blueprint.version_prefix
+        name_prefix = getattr(blueprint, "name_prefix", None)
+        if name_prefix and "name_prefix" not in params:
+            params["name_prefix"] = name_prefix
 
     def url_for(self, view_name: str, **kwargs):
         """Build a URL based on a view name and the values provided.
@@ -1016,12 +1036,8 @@ class Sanic(
             # it's static folder
             if "__file_uri__" in uri:
                 folder_ = uri.split("<__file_uri__:", 1)[0]
-                if folder_.endswith("/"):
-                    folder_ = folder_[:-1]
-
-                if filename.startswith("/"):
-                    filename = filename[1:]
-
+                folder_ = folder_.rstrip("/")
+                filename = filename.lstrip("/")
                 kwargs["__file_uri__"] = filename
 
         if (
@@ -1064,63 +1080,23 @@ class Sanic(
         if netloc is None and external:
             netloc = host or self.config.get("SERVER_NAME", "")
 
-        if external:
-            if not scheme:
-                if ":" in netloc[:8]:
-                    scheme = netloc[:8].split(":", 1)[0]
-                else:
-                    scheme = "http"
-                # Replace http/https with ws/wss for WebSocket handlers
-                if route.extra.websocket:
-                    scheme = scheme.replace("http", "ws")
+        if external and not scheme:
+            if ":" in netloc[:8]:
+                scheme = netloc[:8].split(":", 1)[0]
+            else:
+                scheme = "http"
+            # Replace http/https with ws/wss for WebSocket handlers
+            if route.extra.websocket:
+                scheme = scheme.replace("http", "ws")
 
-            if "://" in netloc[:8]:
-                netloc = netloc.split("://", 1)[-1]
+        if external and "://" in netloc[:8]:
+            netloc = netloc.split("://", 1)[-1]
 
         # find all the parameters we will need to build in the URL
         # matched_params = re.findall(self.router.parameter_pattern, uri)
         route.finalize()
         for param_info in route.params.values():
-            # name, _type, pattern = self.router.parse_parameter_string(match)
-            # we only want to match against each individual parameter
-
-            try:
-                supplied_param = str(kwargs.pop(param_info.name))
-            except KeyError:
-                raise URLBuildError(
-                    f"Required parameter `{param_info.name}` was not "
-                    "passed to url_for"
-                )
-
-            # determine if the parameter supplied by the caller
-            # passes the test in the URL
-            if param_info.pattern:
-                pattern = (
-                    param_info.pattern[1]
-                    if isinstance(param_info.pattern, tuple)
-                    else param_info.pattern
-                )
-                passes_pattern = pattern.match(supplied_param)
-                if not passes_pattern:
-                    if param_info.cast is not str:
-                        msg = (
-                            f'Value "{supplied_param}" '
-                            f"for parameter `{param_info.name}` does "
-                            "not match pattern for type "
-                            f"`{param_info.cast.__name__}`: "
-                            f"{pattern.pattern}"
-                        )
-                    else:
-                        msg = (
-                            f'Value "{supplied_param}" for parameter '
-                            f"`{param_info.name}` does not satisfy "
-                            f"pattern {pattern.pattern}"
-                        )
-                    raise URLBuildError(msg)
-
-            # replace the parameter in the URL with the supplied value
-            replacement_regex = f"(<{param_info.name}.*?>)"
-            out = re.sub(replacement_regex, supplied_param, out)
+            out = self._substitute_url_param(param_info, kwargs, out)
 
         # parse the remainder of the keyword arguments into a querystring
         query_string = urlencode(kwargs, doseq=True) if kwargs else ""
@@ -1128,6 +1104,41 @@ class Sanic(
         out = urlunparse((scheme, netloc, out, "", query_string, anchor))
 
         return out
+
+    @staticmethod
+    def _substitute_url_param(param_info, kwargs, out):
+        try:
+            supplied_param = str(kwargs.pop(param_info.name))
+        except KeyError:
+            raise URLBuildError(
+                f"Required parameter `{param_info.name}` was not "
+                "passed to url_for"
+            )
+
+        if param_info.pattern:
+            pattern = (
+                param_info.pattern[1]
+                if isinstance(param_info.pattern, tuple)
+                else param_info.pattern
+            )
+            passes_pattern = pattern.match(supplied_param)
+            if not passes_pattern and param_info.cast is not str:
+                raise URLBuildError(
+                    f'Value "{supplied_param}" '
+                    f"for parameter `{param_info.name}` does "
+                    "not match pattern for type "
+                    f"`{param_info.cast.__name__}`: "
+                    f"{pattern.pattern}"
+                )
+            if not passes_pattern:
+                raise URLBuildError(
+                    f'Value "{supplied_param}" for parameter '
+                    f"`{param_info.name}` does not satisfy "
+                    f"pattern {pattern.pattern}"
+                )
+
+        replacement_regex = f"(<{param_info.name}.*?>)"
+        return re.sub(replacement_regex, supplied_param, out)
 
     # -------------------------------------------------------------------- #
     # Request Handling
@@ -1171,31 +1182,7 @@ class Sanic(
             request.stream is not None
             and request.stream.stage is not Stage.HANDLER
         ):
-            error_logger.exception(exception, exc_info=True)
-            logger.error(
-                "The error response will not be sent to the client for "
-                f'the following exception:"{exception}". A previous response '
-                "has at least partially been sent."
-            )
-
-            handler = self.error_handler._lookup(
-                exception, request.name if request else None
-            )
-            if handler:
-                logger.warning(
-                    "An error occurred while handling the request after at "
-                    "least some part of the response was sent to the client. "
-                    "The response from your custom exception handler "
-                    f"{handler.__name__} will not be sent to the client."
-                    "Exception handlers should only be used to generate the "
-                    "exception responses. If you would like to perform any "
-                    "other action on a raised exception, consider using a "
-                    "signal handler like "
-                    '`@app.signal("http.lifecycle.exception")`\n'
-                    "For further information, please see the docs: "
-                    "https://sanicframework.org/en/guide/advanced/"
-                    "signals.html",
-                )
+            self._log_late_exception(request, exception)
             return
 
         # -------------------------------------------- #
@@ -1213,25 +1200,7 @@ class Sanic(
                 return await self.handle_exception(request, e, False)
         # No middleware results
         if not response:
-            try:
-                response = self.error_handler.response(request, exception)
-                if isawaitable(response):
-                    response = await response
-            except Exception as e:
-                if isinstance(e, SanicException):
-                    response = self.error_handler.default(request, e)
-                elif self.debug:
-                    response = HTTPResponse(
-                        (
-                            f"Error while handling error: {e}\n"
-                            f"Stack: {format_exc()}"
-                        ),
-                        status=500,
-                    )
-                else:
-                    response = HTTPResponse(
-                        "An error occurred while handling an error", status=500
-                    )
+            response = await self._resolve_error_response(request, exception)
         if response is not None:
             try:
                 request.reset_response()
@@ -1273,6 +1242,59 @@ class Sanic(
             raise ServerError(
                 f"Invalid response type {response!r} (need HTTPResponse)"
             )
+
+    @staticmethod
+    def _warn_late_handler(handler):
+        logger.warning(
+            "An error occurred while handling the request after at "
+            "least some part of the response was sent to the client. "
+            "The response from your custom exception handler "
+            f"{handler.__name__} will not be sent to the client."
+            "Exception handlers should only be used to generate the "
+            "exception responses. If you would like to perform any "
+            "other action on a raised exception, consider using a "
+            "signal handler like "
+            '`@app.signal("http.lifecycle.exception")`\n'
+            "For further information, please see the docs: "
+            "https://sanicframework.org/en/guide/advanced/"
+            "signals.html",
+        )
+
+    def _log_late_exception(self, request, exception):
+        error_logger.exception(exception, exc_info=True)
+        logger.error(
+            "The error response will not be sent to the client for "
+            f'the following exception:"{exception}". A previous response '
+            "has at least partially been sent."
+        )
+
+        handler = self.error_handler._lookup(
+            exception, request.name if request else None
+        )
+        if handler:
+            self._warn_late_handler(handler)
+
+    async def _resolve_error_response(self, request, exception):
+        try:
+            response = self.error_handler.response(request, exception)
+            if isawaitable(response):
+                response = await response
+        except Exception as e:
+            if isinstance(e, SanicException):
+                response = self.error_handler.default(request, e)
+            elif self.debug:
+                response = HTTPResponse(
+                    (
+                        f"Error while handling error: {e}\n"
+                        f"Stack: {format_exc()}"
+                    ),
+                    status=500,
+                )
+            else:
+                response = HTTPResponse(
+                    "An error occurred while handling an error", status=500
+                )
+        return response
 
     async def handle_request(self, request: Request) -> None:  # no cov
         """Handles a request by dispatching it to the appropriate handler.
@@ -1529,73 +1551,88 @@ class Sanic(
     # Execution
     # -------------------------------------------------------------------- #
 
+    async def _execute_request_middleware(self, request, middleware):
+        await self.dispatch(
+            "http.middleware.before",
+            inline=True,
+            context={
+                "request": request,
+                "response": None,
+            },
+            condition={"attach_to": "request"},
+        )
+
+        response = middleware(request)
+        if isawaitable(response):
+            response = await response
+
+        await self.dispatch(
+            "http.middleware.after",
+            inline=True,
+            context={
+                "request": request,
+                "response": None,
+            },
+            condition={"attach_to": "request"},
+        )
+
+        return response
+
     async def _run_request_middleware(
         self, request, middleware_collection
     ):  # no cov
         request._request_middleware_started = True
 
         for middleware in middleware_collection:
-            await self.dispatch(
-                "http.middleware.before",
-                inline=True,
-                context={
-                    "request": request,
-                    "response": None,
-                },
-                condition={"attach_to": "request"},
+            response = await self._execute_request_middleware(
+                request, middleware
             )
-
-            response = middleware(request)
-            if isawaitable(response):
-                response = await response
-
-            await self.dispatch(
-                "http.middleware.after",
-                inline=True,
-                context={
-                    "request": request,
-                    "response": None,
-                },
-                condition={"attach_to": "request"},
-            )
-
             if response:
                 return response
         return None
+
+    async def _execute_response_middleware(
+        self, request, response, middleware
+    ):
+        await self.dispatch(
+            "http.middleware.before",
+            inline=True,
+            context={
+                "request": request,
+                "response": response,
+            },
+            condition={"attach_to": "response"},
+        )
+
+        _response = middleware(request, response)
+        if isawaitable(_response):
+            _response = await _response
+
+        await self.dispatch(
+            "http.middleware.after",
+            inline=True,
+            context={
+                "request": request,
+                "response": _response if _response else response,
+            },
+            condition={"attach_to": "response"},
+        )
+
+        return _response
 
     async def _run_response_middleware(
         self, request, response, middleware_collection
     ):  # no cov
         for middleware in middleware_collection:
-            await self.dispatch(
-                "http.middleware.before",
-                inline=True,
-                context={
-                    "request": request,
-                    "response": response,
-                },
-                condition={"attach_to": "response"},
+            _response = await self._execute_response_middleware(
+                request, response, middleware
             )
-
-            _response = middleware(request, response)
-            if isawaitable(_response):
-                _response = await _response
-
-            await self.dispatch(
-                "http.middleware.after",
-                inline=True,
-                context={
-                    "request": request,
-                    "response": _response if _response else response,
-                },
-                condition={"attach_to": "response"},
-            )
-
-            if _response:
-                response = _response
-                if isinstance(response, BaseHTTPResponse):
-                    response = request.stream.respond(response)
-                break
+            if not _response:
+                continue
+            response = _response
+            if isinstance(response, BaseHTTPResponse):
+                response = request.stream.respond(response)
+            break
         return response
 
     def _build_endpoint_name(self, *parts):
@@ -2482,15 +2519,19 @@ class Sanic(
                 registered.state.server_info = self.state.server_info
             self = registered
         if passthru:
-            for attr, info in passthru.items():
-                if isinstance(info, dict):
-                    for key, value in info.items():
-                        setattr(getattr(self, attr), key, value)
-                else:
-                    setattr(self, attr, info)
+            self._apply_passthru(passthru)
         if hasattr(self, "multiplexer"):
             self.shared_ctx.lock()
         return self
+
+    def _apply_passthru(self, passthru):
+        for attr, info in passthru.items():
+            if not isinstance(info, dict):
+                setattr(self, attr, info)
+                continue
+            target = getattr(self, attr)
+            for key, value in info.items():
+                setattr(target, key, value)
 
     @property
     def inspector(self) -> Inspector:

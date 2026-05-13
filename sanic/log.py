@@ -10,7 +10,6 @@ from sanic.logging.loggers import (
     websockets_logger,
 )
 
-
 __all__ = (
     "deprecation",
     "logger",

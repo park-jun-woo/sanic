@@ -1,7 +1,8 @@
+# ff:type feature=http type=protocol
+# ff:what HTTP/1.1 request/response cycle handler with header parsing and chunk
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
 
 if TYPE_CHECKING:
     from sanic.request import Request
@@ -25,7 +26,6 @@ from sanic.http.constants import Stage
 from sanic.http.stream import Stream
 from sanic.log import access_logger, error_logger, logger
 from sanic.touchup import TouchUpMeta
-
 
 HTTP_CONTINUE = b"HTTP/1.1 100 Continue\r\n\r\n"
 
@@ -102,76 +102,75 @@ class Http(Stream, metaclass=TouchUpMeta):
         """Test if request handling is in progress"""
         return self.stage in (Stage.HANDLER, Stage.RESPONSE)
 
+    async def _handle_one_request(self):
+        """Handle a single HTTP/1.1 request within the connection loop.
+
+        Returns True if the caller should immediately return (transport lost).
+        """
+        try:
+            self.response_func = self.http1_response_header
+            await self.http1_request_header()
+            self.stage = Stage.HANDLER
+            self.perft0 = perf_counter()
+            self.request.conn_info = self.protocol.conn_info
+            await self.protocol.request_handler(self.request)
+
+            if self.stage is Stage.HANDLER and not self.upgrade_websocket:
+                raise ServerError("Handler produced no response")
+            if self.stage is Stage.RESPONSE:
+                await self.response.send(end_stream=True)
+        except CancelledError as exc:
+            if not self.protocol.transport:
+                logger.info(
+                    f"Request: {self.request.method} {self.request.url} "
+                    "stopped. Transport is closed."
+                )
+                return True
+            e = (
+                RequestCancelled()
+                if self.protocol.conn_info.lost
+                else (self.exception or exc)
+            )
+            self.exception = None
+            self.keep_alive = False
+            await self.error_response(e)
+        except Exception as e:
+            await self.error_response(e)
+        return False
+
+    async def _consume_remaining_body(self):
+        """Try to consume any remaining request body."""
+        if self.request_body:
+            if self.response and 200 <= self.response.status < 300:
+                error_logger.error(f"{self.request} body not consumed.")
+            self.request_max_size = min(
+                self.request_max_size, self.protocol.request_max_size
+            )
+            try:
+                async for _ in self:
+                    pass
+            except PayloadTooLarge:
+                await sleep(0.001)
+                self.keep_alive = False
+
     async def http1(self):
         """HTTP 1.1 connection handler"""
         # Handle requests while the connection stays reusable
         while self.keep_alive and self.stage is Stage.IDLE:
             self.init_for_request()
-            # Wait for incoming bytes (in IDLE stage)
             if not self.recv_buffer:
                 await self._receive_more()
             self.stage = Stage.REQUEST
-            try:
-                # Receive and handle a request
-                self.response_func = self.http1_response_header
 
-                await self.http1_request_header()
-
-                self.stage = Stage.HANDLER
-                self.perft0 = perf_counter()
-                self.request.conn_info = self.protocol.conn_info
-                await self.protocol.request_handler(self.request)
-
-                # Handler finished, response should've been sent
-                if self.stage is Stage.HANDLER and not self.upgrade_websocket:
-                    raise ServerError("Handler produced no response")
-
-                if self.stage is Stage.RESPONSE:
-                    await self.response.send(end_stream=True)
-            except CancelledError as exc:
-                # Write an appropriate response before exiting
-                if not self.protocol.transport:
-                    logger.info(
-                        f"Request: {self.request.method} {self.request.url} "
-                        "stopped. Transport is closed."
-                    )
-                    return
-                e = (
-                    RequestCancelled()
-                    if self.protocol.conn_info.lost
-                    else (self.exception or exc)
-                )
-                self.exception = None
-                self.keep_alive = False
-                await self.error_response(e)
-            except Exception as e:
-                # Write an error response
-                await self.error_response(e)
-
-            # Try to consume any remaining request body
-            if self.request_body:
-                if self.response and 200 <= self.response.status < 300:
-                    error_logger.error(f"{self.request} body not consumed.")
-                # Limit the size because the handler may have set it infinite
-                self.request_max_size = min(
-                    self.request_max_size, self.protocol.request_max_size
-                )
-                try:
-                    async for _ in self:
-                        pass
-                except PayloadTooLarge:
-                    # We won't read the body and that may cause httpx and
-                    # tests to fail. This little delay allows clients to push
-                    # a small request into network buffers before we close the
-                    # socket, so that they are then able to read the response.
-                    await sleep(0.001)
-                    self.keep_alive = False
+            if await self._handle_one_request():
+                return
+            await self._consume_remaining_body()
 
             # Clean up to free memory and for the next request
             if self.request:
                 self.request.stream = None
-                if self.response:
-                    self.response.stream = None
+            if self.request and self.response:
+                self.response.stream = None
 
     async def http1_request_header(self):  # no cov
         """Receive and parse request header into self.request."""
@@ -220,11 +219,14 @@ class Http(Stream, metaclass=TouchUpMeta):
             for name, value in (h.split(":", 1) for h in split_headers):
                 name, value = h = name.lower(), value.lstrip()
 
+                if (
+                    name in ("content-length", "transfer-encoding")
+                    and request_body
+                ):
+                    raise ValueError(
+                        "Duplicate Content-Length or Transfer-Encoding"
+                    )
                 if name in ("content-length", "transfer-encoding"):
-                    if request_body:
-                        raise ValueError(
-                            "Duplicate Content-Length or Transfer-Encoding"
-                        )
                     request_body = True
                 elif name == "connection":
                     self.keep_alive = value.lower() == "keep-alive"
@@ -269,11 +271,10 @@ class Http(Stream, metaclass=TouchUpMeta):
             headers = request.headers
             expect = headers.getone("expect", None)
 
-            if expect is not None:
-                if expect.lower() == "100-continue":
-                    self.expecting_continue = True
-                else:
-                    raise ExpectationFailed(f"Unknown Expect: {expect}")
+            if expect is not None and expect.lower() == "100-continue":
+                self.expecting_continue = True
+            elif expect is not None:
+                raise ExpectationFailed(f"Unknown Expect: {expect}")
 
             if headers.getone("transfer-encoding", None) == "chunked":
                 self.request_body = "chunked"
@@ -425,20 +426,23 @@ class Http(Stream, metaclass=TouchUpMeta):
 
         # From request and handler states we can respond, otherwise be silent
         if self.stage is Stage.HANDLER:
-            app = self.protocol.app
+            await self._handle_error_in_handler(exception)
 
-            if self.request is None:
-                self.create_empty_request()
+    async def _handle_error_in_handler(self, exception):
+        app = self.protocol.app
 
-            request_middleware = not isinstance(
-                exception, (ServiceUnavailable, RequestCancelled)
+        if self.request is None:
+            self.create_empty_request()
+
+        request_middleware = not isinstance(
+            exception, (ServiceUnavailable, RequestCancelled)
+        )
+        try:
+            await app.handle_exception(
+                self.request, exception, request_middleware
             )
-            try:
-                await app.handle_exception(
-                    self.request, exception, request_middleware
-                )
-            except Exception as e:
-                await app.handle_exception(self.request, e, False)
+        except Exception as e:
+            await app.handle_exception(self.request, e, False)
 
     def create_empty_request(self) -> None:
         """Create an empty request object for error handling use.
@@ -473,9 +477,11 @@ class Http(Stream, metaclass=TouchUpMeta):
         req, res = self.request, self.response
         extra = {
             "status": getattr(res, "status", 0),
-            "byte": res.headers.get("content-length", 0)
-            if res.headers.get("transfer-encoding") != "chunked"
-            else "chunked",
+            "byte": (
+                res.headers.get("content-length", 0)
+                if res.headers.get("transfer-encoding") != "chunked"
+                else "chunked"
+            ),
             "host": f"{id(self.protocol.transport):X}"[-5:-1] + "unx",
             "request": "nil",
             "duration": (
@@ -510,46 +516,9 @@ class Http(Stream, metaclass=TouchUpMeta):
         # Receive request body chunk
         buf = self.recv_buffer
         if self.request_bytes_left == 0 and self.request_body == "chunked":
-            # Process a chunk header: \r\n<size>[;<chunk extensions>]\r\n
-            while True:
-                pos = buf.find(b"\r\n", 3)
-
-                if pos != -1:
-                    break
-
-                if len(buf) > 64:
-                    self.keep_alive = False
-                    raise BadRequest("Bad chunked encoding")
-
-                await self._receive_more()
-
-            try:
-                raw = buf[2:pos].split(b";", 1)[0].decode()
-                size = self._safe_int(raw, 16)
-            except Exception:
-                self.keep_alive = False
-                raise BadRequest("Bad chunked encoding")
-
-            if size <= 0:
-                self.request_body = None
-
-                if size < 0:
-                    self.keep_alive = False
-                    raise BadRequest("Bad chunked encoding")
-
-                # Consume CRLF, chunk size 0 and the two CRLF that follow
-                pos += 4
-                # Might need to wait for the final CRLF
-                while len(buf) < pos:
-                    await self._receive_more()
-                del buf[:pos]
+            result = await self._read_chunk_header(buf)
+            if result is None:
                 return None
-
-            # Remove CRLF, chunk size and the CRLF that follows
-            del buf[: pos + 2]
-
-            self.request_bytes_left = size
-            self.request_bytes += size
 
         # Request size limit
         if self.request_bytes > self.request_max_size:
@@ -579,6 +548,43 @@ class Http(Stream, metaclass=TouchUpMeta):
         )
 
         return data
+
+    async def _read_chunk_header(self, buf):
+        """Process a chunk header for chunked transfer encoding.
+
+        Returns True if there is data to read, None if end of body.
+        """
+        while True:
+            pos = buf.find(b"\r\n", 3)
+            if pos != -1:
+                break
+            if len(buf) > 64:
+                self.keep_alive = False
+                raise BadRequest("Bad chunked encoding")
+            await self._receive_more()
+
+        try:
+            raw = buf[2:pos].split(b";", 1)[0].decode()
+            size = self._safe_int(raw, 16)
+        except Exception:
+            self.keep_alive = False
+            raise BadRequest("Bad chunked encoding")
+
+        if size <= 0:
+            self.request_body = None
+            if size < 0:
+                self.keep_alive = False
+                raise BadRequest("Bad chunked encoding")
+            pos += 4
+            while len(buf) < pos:
+                await self._receive_more()
+            del buf[:pos]
+            return None
+
+        del buf[: pos + 2]
+        self.request_bytes_left = size
+        self.request_bytes += size
+        return True
 
     # Response methods
 

@@ -2,7 +2,6 @@ import sys
 
 from typing import Any
 
-
 LOGGING_CONFIG_DEFAULTS: dict[str, Any] = dict(  # no cov
     version=1,
     disable_existing_loggers=False,

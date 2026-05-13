@@ -1,9 +1,10 @@
+# ff:func feature=server type=handler control=iteration dimension=1
+# ff:what Trigger event callback functions or coroutines in sequence
 from __future__ import annotations
 
 from collections.abc import Iterable
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Callable
-
 
 if TYPE_CHECKING:
     from sanic import Sanic
@@ -22,15 +23,16 @@ def trigger_events(
         loop ([type]): [description]
         app (Optional[Sanic], optional): [description]. Defaults to None.
     """
-    if events:
-        for event in events:
-            try:
-                result = event(**kwargs) if not app else event(app, **kwargs)
-            except TypeError:
-                result = (
-                    event(loop, **kwargs)
-                    if not app
-                    else event(app, loop, **kwargs)
-                )
-            if isawaitable(result):
-                loop.run_until_complete(result)
+    if not events:
+        return
+    for event in events:
+        try:
+            result = event(**kwargs) if not app else event(app, **kwargs)
+        except TypeError:
+            result = (
+                event(loop, **kwargs)
+                if not app
+                else event(app, loop, **kwargs)
+            )
+        if isawaitable(result):
+            loop.run_until_complete(result)

@@ -1,3 +1,5 @@
+# ff:type feature=cli type=handler
+# ff:what HTTP client for communicating with a running Sanic inspector instance
 from __future__ import annotations
 
 import sys
@@ -12,7 +14,6 @@ from urllib.request import urlopen
 from sanic.application.logo import get_logo
 from sanic.application.motd import MOTDTTY
 from sanic.log import Colors
-
 
 try:  # no cov
     from ujson import dumps, loads
@@ -54,6 +55,25 @@ class InspectorClient:
             )
             sys.stdout.write(out + "\n")
 
+    def _display_worker(self, out, name, info):
+        info = "\n".join(
+            f"\t{key}: {Colors.BLUE}{value}{Colors.END}"
+            for key, value in info.items()
+        )
+        out(
+            "\n"
+            + indent(
+                "\n".join(
+                    [
+                        f"{Colors.BOLD}{Colors.SANIC}{name}{Colors.END}",
+                        info,
+                    ]
+                ),
+                "  ",
+            )
+            + "\n"
+        )
+
     def info(self) -> None:
         out = sys.stdout.write
         response = self.request("", "GET")
@@ -69,23 +89,7 @@ class InspectorClient:
             out=out,
         )
         for name, info in data["workers"].items():
-            info = "\n".join(
-                f"\t{key}: {Colors.BLUE}{value}{Colors.END}"
-                for key, value in info.items()
-            )
-            out(
-                "\n"
-                + indent(
-                    "\n".join(
-                        [
-                            f"{Colors.BOLD}{Colors.SANIC}{name}{Colors.END}",
-                            info,
-                        ]
-                    ),
-                    "  ",
-                )
-                + "\n"
-            )
+            self._display_worker(out, name, info)
 
     def request(self, action: str, method: str = "POST", **kwargs: Any) -> Any:
         url = f"{self.base_url}/{action}"

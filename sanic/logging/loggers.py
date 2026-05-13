@@ -2,7 +2,6 @@ import logging
 
 from sanic.logging.filter import VerbosityFilter
 
-
 _verbosity_filter = VerbosityFilter()
 
 logger = logging.getLogger("sanic.root")  # no cov

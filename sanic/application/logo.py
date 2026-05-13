@@ -1,10 +1,13 @@
+# ff:func feature=cli type=util control=sequence
+# ff:what Get the Sanic logo string based on terminal capabilities and coffee m
+
+
 import re
 import sys
 
 from os import environ
 
 from sanic.helpers import is_atty
-
 
 BASE_LOGO = """
 

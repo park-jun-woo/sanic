@@ -1,38 +1,12 @@
-from enum import Enum, IntEnum, auto
+# F5 exempt: re-export hub
+from sanic.application.mode import Mode
+from sanic.application.server import Server
+from sanic.application.server_stage import ServerStage
+from sanic.application.str_enum import StrEnum
 
-
-class StrEnum(str, Enum):  # no cov
-    def _generate_next_value_(name: str, *args) -> str:  # type: ignore
-        return name.lower()
-
-    def __eq__(self, value: object) -> bool:
-        value = str(value).upper()
-        return super().__eq__(value)
-
-    def __hash__(self) -> int:
-        return hash(self.value)
-
-    def __str__(self) -> str:
-        return self.value
-
-
-class Server(StrEnum):
-    """Server types."""
-
-    SANIC = auto()
-    ASGI = auto()
-
-
-class Mode(StrEnum):
-    """Server modes."""
-
-    PRODUCTION = auto()
-    DEBUG = auto()
-
-
-class ServerStage(IntEnum):
-    """Server stages."""
-
-    STOPPED = auto()
-    PARTIAL = auto()
-    SERVING = auto()
+__all__ = (
+    "Mode",
+    "Server",
+    "ServerStage",
+    "StrEnum",
+)
